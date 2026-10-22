@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Vitals spike">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.5h6L4.5 11zM8.5 12.5h6L11.5 5z' fill='%231b2f80'/%3E%3C/svg%3E">
+<title>Vitals grid spike (fake data)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar top">
+  <div class="title">
+    <strong>Vitals grid spike</strong>
+    <span class="patient">DEMO PATIENT &middot; Chart # 000000 &middot; fake data only</span>
+  </div>
+  <div class="seg" id="modeSeg" role="tablist" aria-label="Mode">
+    <button type="button" data-mode="ink" class="on">A &middot; Digital ink</button>
+    <button type="button" data-mode="smart">B &middot; Smart grid</button>
+    <button type="button" data-mode="typed">C &middot; Type it in</button>
+  </div>
+  <div class="diag" aria-live="off"><div id="diag1"></div><div id="diag2"></div></div>
+  <button type="button" id="thumbBtn" class="thumb" hidden aria-label="Show last monitor photo"><img alt=""></button>
+  <label class="btn primary" for="photoInput">Photo of monitor</label>
+  <input type="file" id="photoInput" class="visually-hidden" accept="image/*" capture="environment">
+</header>
+
+<div class="bar tools">
+  <div class="seg draw-only" id="toolSeg" aria-label="Tool">
+    <button type="button" data-tool="pen" class="on">Pen</button>
+    <button type="button" data-tool="erase">Eraser</button>
+  </div>
+  <button type="button" id="undoBtn" disabled>Undo</button>
+  <button type="button" id="clearBtn">Clear</button>
+  <div class="seg smart-only" id="markSeg" aria-label="What a mark means">
+    <button type="button" data-mark="auto" class="on" title="Recognize the mark from its shape">Auto</button>
+    <button type="button" data-mark="sys" title="Every mark is a systolic pressure">&#9660; Sys</button>
+    <button type="button" data-mark="dia" title="Every mark is a diastolic pressure">&#9650; Dia</button>
+    <button type="button" data-mark="hr" title="Every mark is a heart rate">&bull; HR</button>
+  </div>
+  <label class="field smart-only">Snap to
+    <select id="snapSel"></select>
+  </label>
+  <span class="spacer"></span>
+  <label class="field">Start
+    <input type="time" id="startInput" value="08:00" step="300">
+  </label>
+  <label class="field">Column
+    <select id="colSel"></select>
+  </label>
+</div>
+
+<main>
+  <div class="chart-wrap">
+    <div id="chart" class="chart">
+      <canvas id="bgCanvas"></canvas>
+      <canvas id="inkCanvas"></canvas>
+      <canvas id="liveCanvas"></canvas>
+      <canvas id="overlayCanvas"></canvas>
+      <div id="readout" class="readout" hidden></div>
+      <div id="toast" class="toast" hidden></div>
+    </div>
+    <!-- Outside #chart, whose touch handlers would block taps on these buttons. -->
+    <div id="typePanel" class="type-panel" hidden>
+      <div class="tp-head">
+        <button type="button" class="tp-step" data-step="-1" aria-label="Earlier time">&lsaquo;</button>
+        <div class="tp-when"><b id="tpTime">--:--</b><span id="tpStatus"></span></div>
+        <button type="button" class="tp-step" data-step="1" aria-label="Later time">&rsaquo;</button>
+        <button type="button" id="tpNow">Now</button>
+      </div>
+      <div id="tpNotice" class="tp-notice" hidden>
+        <span id="tpNoticeText"></span>
+        <button type="button" id="tpStartNow"></button>
+      </div>
+      <div class="tp-fields" id="tpFields">
+        <button type="button" data-field="sys"><span>&#9660; Sys</span><b></b></button>
+        <button type="button" data-field="dia"><span>&#9650; Dia</span><b></b></button>
+        <button type="button" data-field="hr"><span>&bull; HR</span><b></b></button>
+        <button type="button" data-field="spo2"><span>SpO&#8322;</span><b></b></button>
+        <button type="button" data-field="etco2"><span>EtCO&#8322;</span><b></b></button>
+        <button type="button" data-field="rr"><span>RR</span><b></b></button>
+      </div>
+      <div class="tp-pad" id="tpPad">
+        <button type="button" data-key="1">1</button>
+        <button type="button" data-key="2">2</button>
+        <button type="button" data-key="3">3</button>
+        <button type="button" data-key="4">4</button>
+        <button type="button" data-key="5">5</button>
+        <button type="button" data-key="6">6</button>
+        <button type="button" data-key="7">7</button>
+        <button type="button" data-key="8">8</button>
+        <button type="button" data-key="9">9</button>
+        <button type="button" data-key="back" class="fn" aria-label="Delete last digit">&#9003;</button>
+        <button type="button" data-key="0">0</button>
+        <button type="button" data-key="next" class="fn">Next</button>
+      </div>
+      <div class="tp-actions">
+        <button type="button" id="tpDelete" class="danger">Delete time</button>
+        <button type="button" id="tpSave" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+  <div id="below">
+    <div id="vtable" class="vtable"></div>
+    <div id="inkNote" class="ink-note">
+      <b>Digital ink:</b> everything you draw stays a drawing, like on paper. Undo removes the last stroke; the Eraser removes any stroke it touches.
+      Switch to <b>B &middot; Smart grid</b> to have marks turned into numbers, or to <b>C &middot; Type it in</b> to enter the numbers without handwriting.
+    </div>
+    <footer class="status">
+      <span class="legend">
+        <span><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2.5 3.5h9L7 11z" class="bp"/></svg> Systolic</span>
+        <span><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2.5 10.5h9L7 3z" class="bp"/></svg> Diastolic</span>
+        <span><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="3.3" class="hr"/></svg> Heart rate</span>
+        <span class="hint" id="hint"></span>
+      </span>
+    </footer>
+  </div>
+</main>
+
+<div id="photoModal" class="modal" hidden>
+  <div class="modal-card">
+    <img id="photoImg" alt="Photo of the monitor">
+    <div class="modal-row">
+      <span id="photoCaption"></span>
+      <span class="spacer"></span>
+      <label class="btn" for="photoInput">Retake</label>
+      <button type="button" id="photoClose" class="primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
