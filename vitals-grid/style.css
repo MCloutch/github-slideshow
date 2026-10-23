@@ -123,7 +123,7 @@ main { padding: 0 8px; }
 
 .vtable {
   position: relative;
-  height: 104px;
+  height: 70px;
   margin-top: 4px;
   background: #fff;
   border-radius: 6px;
@@ -137,7 +137,7 @@ main { padding: 0 8px; }
   text-align: right;
   font-size: 11px; color: #444;
 }
-.vtable .labels span, .vtable .vcol span { height: 14px; line-height: 14px; display: block; }
+.vtable .labels span, .vtable .vcol span { height: 16px; line-height: 16px; display: block; }
 .vtable .labels .t, .vtable .vcol .t { color: #777; font-size: 10px; }
 .vtable .vcol {
   position: absolute; top: 3px;
@@ -152,10 +152,10 @@ main { padding: 0 8px; }
 .vtable .vcol .t { font-weight: 400; }
 .vtable .vcol.fresh { animation: fresh 1.6s ease-out; }
 @keyframes fresh { from { background: #ffe58a; } to { background: transparent; } }
-.vtable .empty { position: absolute; top: 42px; color: #777; font-size: 13px; }
+.vtable .empty { position: absolute; top: 26px; color: #777; font-size: 13px; }
 
 .ink-note {
-  height: 104px;
+  height: 70px;
   margin-top: 4px;
   padding: 10px 14px;
   background: #fff;
@@ -204,6 +204,7 @@ body[data-mode="ink"] .vtable { display: none; }
 .tp-fields b { font-size: 21px; line-height: 24px; font-variant-numeric: tabular-nums; padding: 0 2px; border-radius: 4px; }
 .tp-fields button.active { border: 2px solid var(--ink); background: #eef2ff; padding: 1px 7px; }
 .tp-fields button.replace b { background: #c7d2fe; }
+.tp-fields button.carried b { color: #8d97a7; font-weight: 500; }
 .tp-fields button.changed b { color: #b45309; }
 /* Short panels (smaller iPads): one row of fields leaves room for big keys. */
 .type-panel.compact .tp-fields { grid-template-columns: repeat(6, 1fr); gap: 4px; }
@@ -220,6 +221,44 @@ body[data-mode="ink"] .vtable { display: none; }
 .tp-actions .primary:disabled { background: #a5b0d1; border-color: #a5b0d1; color: #fff; }
 .tp-actions .danger { color: #b91c1c; }
 .tp-actions .danger:disabled { color: #9aa0a8; }
+
+/* Picker for a cell in the rows below the grid (B and C). */
+.cell-mark {
+  position: absolute; z-index: 4; pointer-events: none;
+  border: 2px solid #d97706; border-radius: 4px; background: rgba(245, 158, 11, .14);
+}
+.row-picker {
+  position: absolute; bottom: 4px; z-index: 6;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px;
+  background: rgba(255, 255, 255, .98);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .2);
+  touch-action: manipulation;
+}
+.rp-tabs { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
+.rp-tabs button { min-height: 32px; padding: 0 1px; font-size: 12px; border-radius: 6px; }
+.rp-tabs button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.rp-head { display: flex; align-items: center; gap: 4px; }
+.rp-step, #rpClose { width: 40px; min-height: 40px; padding: 0; font-size: 26px; line-height: 1; flex: 0 0 auto; }
+.rp-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.rp-title b { font-size: 15px; }
+.rp-title span { font-size: 11.5px; color: #6b7280; }
+.rp-values {
+  flex: 1 1 auto; min-height: 96px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  display: grid; grid-template-columns: repeat(5, 1fr); grid-auto-rows: 44px; gap: 5px; align-content: start;
+  padding: 2px;
+}
+.rp-values button { height: 100%; min-height: 0; padding: 0; font-size: 18px; font-variant-numeric: tabular-nums; }
+.rp-values button.entered { background: var(--ink); color: #fff; border-color: var(--ink); }
+.rp-values button.carried { border: 2px dashed #8d97a7; color: #4b5563; }
+.rp-values.rhythms { grid-template-columns: repeat(2, 1fr); grid-auto-rows: 48px; }
+.rp-values.rhythms button { flex-direction: column; gap: 1px; font-size: 15px; font-weight: 600; }
+.rp-values.rhythms small { font-size: 10.5px; font-weight: 400; color: #6b7280; white-space: normal; line-height: 1.1; }
+.rp-values.rhythms button.entered small { color: #dbe3ff; }
+.rp-actions { display: flex; }
+.rp-actions button { flex: 1; min-height: 40px; }
 
 .status {
   display: flex; align-items: center; gap: 14px;
