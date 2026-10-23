@@ -102,6 +102,18 @@
         <button type="button" id="tpSave" class="primary">Save</button>
       </div>
     </div>
+    <div id="cellMark" class="cell-mark" hidden></div>
+    <div id="rowPicker" class="row-picker" hidden>
+      <div class="rp-tabs" id="rpTabs"></div>
+      <div class="rp-head">
+        <button type="button" class="rp-step" data-step="-1" aria-label="Earlier time">&lsaquo;</button>
+        <div class="rp-title"><b id="rpTitle"></b><span id="rpInfo"></span></div>
+        <button type="button" class="rp-step" data-step="1" aria-label="Later time">&rsaquo;</button>
+        <button type="button" id="rpClose" aria-label="Close">&times;</button>
+      </div>
+      <div class="rp-values" id="rpValues"></div>
+      <div class="rp-actions"><button type="button" id="rpClear">Clear the value entered here</button></div>
+    </div>
   </div>
   <div id="below">
     <div id="vtable" class="vtable"></div>

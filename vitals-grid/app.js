@@ -15,30 +15,61 @@ const GRID = {
   labelStep: 20,
   dottedValue: 100,
 };
-const LOWER_ROWS = ['SpO2 %', 'EtCO2', 'RR', 'Paw', 'EKG', 'T', 'IV Fluid', 'EBL'];
 const COLUMN_MINUTE_CHOICES = [1, 2, 3, 5, 10, 15];
 const SNAP_CHOICES = [1, 2, 5, 10];
 const DEFAULT_SNAP = 5;
-// Numbers kept per time point. Modes B and C share them; only sys, dia and hr plot on the grid.
-const VITAL_FIELDS = [
-  { key: 'sys', label: 'Systolic', min: 1, max: 300, len: 3 },
-  { key: 'dia', label: 'Diastolic', min: 1, max: 250, len: 3 },
-  { key: 'hr', label: 'Heart rate', min: 1, max: 300, len: 3 },
-  { key: 'spo2', label: 'SpO\u2082', min: 1, max: 100, len: 3 },
-  { key: 'etco2', label: 'EtCO\u2082', min: 0, max: 150, len: 3 },
-  { key: 'rr', label: 'RR', min: 0, max: 99, len: 2 },
+
+function range(from, to, step, decimals = 0) {
+  const out = [];
+  for (let i = 0; from + i * step <= to + 1e-9; i++) out.push(Number((from + i * step).toFixed(decimals)));
+  return out;
+}
+
+const RHYTHMS = [
+  ['NSR', 'Normal sinus rhythm'], ['ST', 'Sinus tachycardia'], ['SB', 'Sinus bradycardia'],
+  ['AF', 'Atrial fibrillation'], ['AFL', 'Atrial flutter'], ['SVT', 'Supraventricular tachycardia'],
+  ['PAC', 'Premature atrial beats'], ['PVC', 'Premature ventricular beats'], ['JR', 'Junctional rhythm'],
+  ['Paced', 'Paced rhythm'],
 ];
+
+// Rows below the grid, in paper order. In B and C each cell is picked from a list and carries forward.
+const ROW_PARAMS = [
+  { key: 'spo2', label: 'SpO\u2082', paper: 'SpO2 %', unit: '%', values: range(70, 100, 1), typical: 98 },
+  { key: 'etco2', label: 'EtCO\u2082', paper: 'EtCO2', unit: 'mmHg', values: range(10, 80, 1), typical: 35 },
+  { key: 'rr', label: 'RR', paper: 'RR', unit: 'breaths/min', values: range(0, 40, 1), typical: 12 },
+  { key: 'paw', label: 'Paw', paper: 'Paw', unit: 'cmH\u2082O', values: range(0, 50, 1), typical: 15 },
+  { key: 'ekg', label: 'EKG', paper: 'EKG', unit: 'rhythm', rhythms: RHYTHMS },
+  { key: 'temp', label: 'T', paper: 'T', unit: '\u00b0C', values: range(33, 40, 0.1, 1), typical: 36.5, decimals: 1 },
+  { key: 'ivf', label: 'IV Fluid', paper: 'IV Fluid', unit: 'mL', values: range(0, 3000, 50), typical: 0 },
+  { key: 'ebl', label: 'EBL', paper: 'EBL', unit: 'mL', values: range(0, 2000, 10), typical: 0 },
+];
+const LOWER_ROWS = ROW_PARAMS.map((p) => p.paper);
+
+// Fields of the mode C number pad. Typed SpO2, EtCO2 and RR use the same ranges as their row pickers.
+const VITAL_FIELDS = [
+  { key: 'sys', label: 'Systolic', min: 40, max: 300, len: 3 },
+  { key: 'dia', label: 'Diastolic', min: 20, max: 200, len: 3 },
+  { key: 'hr', label: 'Heart rate', min: 20, max: 250, len: 3 },
+  { key: 'spo2', label: 'SpO\u2082', min: 70, max: 100, len: 3 },
+  { key: 'etco2', label: 'EtCO\u2082', min: 10, max: 80, len: 2 },
+  { key: 'rr', label: 'RR', min: 0, max: 40, len: 2 },
+];
+const TABLE_FIELDS = VITAL_FIELDS.slice(0, 3);
+// Everything a time point can hold; modes B and C share it.
+const ALL_KEYS = ['sys', 'dia', 'hr', ...ROW_PARAMS.map((p) => p.key)];
 
 // Horizontal sizes are in column widths so drawings rescale cleanly when the iPad rotates.
 const NOTES_COLS = 3.6;
 const SCALE_COLS = 1.25;
 const RIGHT_PAD_COLS = 0.6;
-const LOWER_ROW_RATIO = 1.25;   // height of a row below the grid, relative to one 10-unit grid row
+const LOWER_ROW_RATIO = 1.2;    // height of a row below the grid, relative to one 10-unit grid row
 const HEADER_H = 20;            // clock-time strip above the grid (CSS px)
 
 const INK_COLOR = '#1b2f80';
 const BP_COLOR = '#1d4ed8';
 const HR_COLOR = '#d42a2a';
+const ENTERED_COLOR = '#111827';
+const CARRIED_COLOR = '#8d97a7';   // carried-forward values: a little lighter than entered ones
 const INK_WIDTH = 2.2;
 const ERASER_R = 11;
 const TAP_PX = 7;
@@ -176,11 +207,16 @@ function timeAt(col) {
 }
 
 function regionAt(x, y) {
-  if (x >= L.gridLeft - 6 && x <= L.gridRight + 6 && y >= L.gridTop - 8 && y <= L.gridBottom) return 'grid';
+  // Big shapes can start in the scale margin or the clock-time strip, so those count as grid.
+  if (x >= L.notesW && x <= L.gridRight + L.colW / 2 && y >= 0 && y <= L.gridBottom) return 'grid';
   if (x >= 2 && x < L.notesW && y >= L.gridTop && y <= L.gridBottom) return 'notes';
-  if (x >= L.gridLeft && x <= L.gridRight && y > L.gridBottom && y <= L.lowerBottom) return 'rows';
+  // Picker cells sit centred on the time lines, so they reach half a column past the grid's edges.
+  const pad = state.mode === 'ink' ? 0 : L.colW / 2;
+  if (x >= L.gridLeft - pad && x <= L.gridRight + pad && y > L.gridBottom && y <= L.lowerBottom) return 'rows';
   return null;
 }
+
+const rowIndexAt = (y) => Math.max(0, Math.min(ROW_PARAMS.length - 1, Math.floor((y - L.lowerTop) / L.lowerRowH)));
 
 /* ---------- drawing ---------- */
 
@@ -250,20 +286,23 @@ function drawBackground() {
   }
   c.stroke();
 
-  // Frames: grid, Notes column, rows below.
+  // Frames: grid, Notes column, rows below. In B and C the row cells are centred on the time
+  // lines, so the rows reach half a column past the grid on both sides.
+  const half = state.mode === 'ink' ? 0 : L.colW / 2;
+  const rowsLeft = Math.round(gl - half) + 0.5, rowsRight = gr + half;
   c.strokeStyle = '#222';
   c.lineWidth = 1.5;
   c.strokeRect(gl, gt, gr - gl, gb - gt);
   c.beginPath();
   c.moveTo(1, gt); c.lineTo(gl, gt);
   c.moveTo(1, gt); c.lineTo(1, lowerBottom);
-  c.moveTo(gr, gb); c.lineTo(gr, lowerBottom);
+  c.moveTo(rowsRight, gb); c.lineTo(rowsRight, lowerBottom);
   for (let i = 0; i <= LOWER_ROWS.length; i++) {
     const y = Math.round(lowerTop + i * lowerRowH) + 0.5;
     c.moveTo(1, y);
-    c.lineTo(gr, y);
+    c.lineTo(rowsRight, y);
   }
-  c.moveTo(gl, lowerTop); c.lineTo(gl, lowerBottom);
+  c.moveTo(rowsLeft, lowerTop); c.lineTo(rowsLeft, lowerBottom);
   c.stroke();
   c.strokeStyle = '#c9ccd1';
   c.lineWidth = 1;
@@ -285,9 +324,32 @@ function drawBackground() {
   c.textBaseline = 'middle';
   for (let v = GRID.labelFrom; v <= GRID.labelTo; v += GRID.labelStep) c.fillText(String(v), gl - 4, valueY(v));
 
-  c.fillStyle = '#222';
-  c.font = `12px ${FONT}`;
-  LOWER_ROWS.forEach((label, i) => c.fillText(label, gl - 6, lowerTop + (i + 0.5) * lowerRowH + 0.5));
+  // Mode A keeps the paper's labels; B and C add units, shrinking the text to fit narrow screens.
+  ROW_PARAMS.forEach((p, i) => {
+    const y = lowerTop + (i + 0.5) * lowerRowH + 0.5;
+    if (state.mode === 'ink') {
+      c.fillStyle = '#222';
+      c.font = `12px ${FONT}`;
+      c.fillText(p.paper, gl - 6, y);
+      return;
+    }
+    const right = rowsLeft - 4;
+    let size = 12;
+    const fits = () => {
+      c.font = `${size}px ${FONT}`;
+      const lw = c.measureText(p.label).width;
+      c.font = `${size - 1.5}px ${FONT}`;
+      return lw + 4 + c.measureText(p.unit).width <= right - 4;
+    };
+    while (size > 8 && !fits()) size -= 0.5;
+    c.font = `${size - 1.5}px ${FONT}`;
+    c.fillStyle = '#6b7280';
+    c.fillText(p.unit, right, y);
+    const uw = c.measureText(p.unit).width;
+    c.font = `${size}px ${FONT}`;
+    c.fillStyle = '#222';
+    c.fillText(p.label, right - 4 - uw, y);
+  });
 
   // Clock times: not printed on paper, generated from the start time and column interval.
   c.textAlign = 'center';
@@ -350,8 +412,8 @@ function renderStroke(c, s, color = s.color || INK_COLOR) {
 }
 
 function symbolSize() {
-  const hw = Math.max(3.5, Math.min(5.5, L.colW * 0.21));
-  return { hw, hh: hw * 1.4 };
+  const hw = Math.max(4.5, Math.min(7.5, L.colW * 0.27));
+  return { hw, hh: hw * 1.3, dot: Math.max(3.3, Math.min(4.5, L.colW * 0.15)) };
 }
 
 // Point of the triangle at (x, y); its flat side is dy away (negative = above, so it points down).
@@ -370,7 +432,7 @@ const plotY = (v) => valueY(Math.max(GRID.valueMin, Math.min(GRID.valueMax, v)))
 
 // Martin's legend: ▼ with its point at the systolic value, ▲ with its point at the diastolic value, dot for heart rate.
 function drawMarks(c, x, v) {
-  const { hw, hh } = symbolSize();
+  const { hw, hh, dot } = symbolSize();
   c.lineJoin = 'round';
   c.lineWidth = 1;
   c.fillStyle = BP_COLOR;
@@ -380,7 +442,7 @@ function drawMarks(c, x, v) {
   if (v.hr != null) {
     c.fillStyle = HR_COLOR;
     c.beginPath();
-    c.arc(x, plotY(v.hr), 3.3, 0, Math.PI * 2);
+    c.arc(x, plotY(v.hr), dot, 0, Math.PI * 2);
     c.fill();
   }
 }
@@ -391,11 +453,85 @@ function drawSmartMarks(c, skipCol = null) {
   }
 }
 
+// The rows below the grid as charted: each entered value, then the same value marked
+// carried (with the time it came from) at every later charted time until a new entry.
+// Only entered values are saved; carried ones are always derived from them.
+function rowView() {
+  const vit = state.data.smart.vitals;
+  const cols = Object.keys(vit).map(Number).sort((a, b) => a - b);
+  const view = {};
+  for (const p of ROW_PARAMS) {
+    const cells = [];
+    let carry = null;
+    for (const col of cols) {
+      const v = vit[col][p.key];
+      if (v != null) {
+        carry = { value: v, from: col };
+        cells.push({ col, value: v, carried: false });
+      } else if (carry) {
+        cells.push({ col, value: carry.value, carried: true, from: carry.from });
+      }
+    }
+    view[p.key] = cells;
+  }
+  return view;
+}
+
+function cellText(p, v) {
+  if (p.decimals) return Number(v).toFixed(p.decimals);
+  return String(v);
+}
+
+// Draws text centred at x, shrinking (then shortening) it to fit the column.
+function fitText(c, text, x, y, maxW, size, weight) {
+  let s = size;
+  c.font = `${weight} ${s}px ${FONT}`;
+  while (s > 7 && c.measureText(text).width > maxW) c.font = `${weight} ${(s -= 0.5)}px ${FONT}`;
+  let t = text;
+  while (t.length > 1 && c.measureText(t).width > maxW) t = t.slice(0, -2) + '\u2026';
+  c.fillText(t, x, y);
+}
+
+const PAD_ROW_KEYS = ['spo2', 'etco2', 'rr'];   // rows the mode C number pad also edits
+
+function drawRowCell(c, i, col, text, carried) {
+  const size = Math.max(8, Math.min(11.5, L.colW * 0.43));
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillStyle = carried ? CARRIED_COLOR : ENTERED_COLOR;
+  fitText(c, text, colX(col), L.lowerTop + (i + 0.5) * L.lowerRowH + 0.5, L.colW - 2, size, carried ? '400' : '600');
+}
+
+function drawRowValues(c, skipCol = null) {
+  const view = rowView();
+  c.save();
+  ROW_PARAMS.forEach((p, i) => {
+    for (const cell of view[p.key]) {
+      if (cell.col === skipCol && PAD_ROW_KEYS.includes(p.key)) continue;
+      drawRowCell(c, i, cell.col, cellText(p, cell.value), cell.carried);
+    }
+  });
+  c.restore();
+}
+
 function redrawInk() {
   clearCanvas('ink');
-  for (const s of cur().strokes) renderStroke(ctx.ink, s);
-  // While a typed time point has unsaved changes, its preview replaces the saved marks.
-  if (state.mode !== 'ink') drawSmartMarks(ctx.ink, state.mode === 'typed' && typed.dirty ? typed.col : null);
+  const c = ctx.ink;
+  if (state.mode === 'ink') {
+    for (const s of cur().strokes) renderStroke(c, s);
+    return;
+  }
+  // In B and C the rows below the grid are pickers, so ink there (from earlier handwriting) isn't shown.
+  c.save();
+  c.beginPath();
+  c.rect(0, 0, L.cssW, L.lowerTop);
+  c.clip();
+  for (const s of cur().strokes) renderStroke(c, s);
+  c.restore();
+  // While a typed time point has unsaved changes, its preview replaces what's saved there.
+  const skip = state.mode === 'typed' && typed.dirty ? typed.col : null;
+  drawSmartMarks(c, skip);
+  drawRowValues(c, skip);
 }
 
 /* ---------- Pencil input ---------- */
@@ -437,6 +573,12 @@ function onPointerDown(e) {
   }
   e.preventDefault();
   try { chartEl.setPointerCapture(e.pointerId); } catch (_) { /* capture is optional */ }
+  diag.lastType = e.pointerType;
+  if (state.mode === 'smart' && region === 'rows') {
+    // In B the rows are pickers: a Pencil (or mouse) tap opens one, nothing is drawn.
+    gesture = { id: e.pointerId, rowTap: { x0: x, y0: y, moved: 0 } };
+    return;
+  }
   const erasing = tool === 'erase' || (e.buttons & 32) !== 0;
   gesture = {
     id: e.pointerId,
@@ -448,9 +590,9 @@ function onPointerDown(e) {
     samples: 1,
     snapshotTaken: false,
   };
-  diag.lastType = e.pointerType;
   clearTimeout(rejectTimer);
   clearCanvas('live');
+  drawPending();
   if (erasing) {
     eraseAt(x, y);
   } else {
@@ -488,6 +630,11 @@ function onPointerMove(e) {
     return;
   }
   if (e.pointerId !== gesture.id) return;
+  if (gesture.rowTap) {
+    const [x, y] = local(e);
+    gesture.rowTap.moved = Math.max(gesture.rowTap.moved, Math.hypot(x - gesture.rowTap.x0, y - gesture.rowTap.y0));
+    return;
+  }
   gesture.events++;
   for (const ev of coalesced(e)) {
     const [x, y] = local(ev);
@@ -512,7 +659,7 @@ function endGesture(e) {
   renderDiag();
 }
 
-function endTypedGesture() {
+function endTapGesture() {
   gesture = null;
   chartRect = null;
   clearCanvas('overlay');
@@ -522,7 +669,16 @@ function endTypedGesture() {
 function onPointerUp(e) {
   if (!gesture || e.pointerId !== gesture.id) return;
   if (gesture.typed) {
-    endTypedGesture();
+    const tap = gesture.rowTap;
+    endTapGesture();
+    if (tap && tap.moved <= 12) openPicker(rowIndexAt(tap.y0), typed.col);
+    return;
+  }
+  if (gesture.rowTap) {
+    const tap = gesture.rowTap;
+    endTapGesture();
+    if (tap.moved <= 12) openPicker(rowIndexAt(tap.y0), snapCol(tap.x0));
+    else toast('Tap a cell in these rows to pick a value');
     return;
   }
   if (gesture.erasing) {
@@ -535,8 +691,8 @@ function onPointerUp(e) {
 
 function onPointerCancel(e) {
   if (!gesture || e.pointerId !== gesture.id) return;
-  if (gesture.typed) {
-    endTypedGesture();
+  if (gesture.typed || gesture.rowTap) {
+    endTapGesture();
     return;
   }
   if (gesture.erasing) {
@@ -614,62 +770,161 @@ function classify(P, mark) {
   if (mark === 'sys') return tap ? { kind: 'sys', x: cx, y: cy } : { kind: 'sys', x: P[iBottom].x, y: maxY };
   if (mark === 'dia') return tap ? { kind: 'dia', x: cx, y: cy } : { kind: 'dia', x: P[iTop].x, y: minY };
 
-  // V and Λ are checked before taps so that small ones aren't mistaken for dots.
-  const first = P[0], last = P[n - 1];
-  const inner = (i) => i > 0.1 * (n - 1) && i < 0.9 * (n - 1);
-  // Ends far apart sideways: rules out tiny circles drawn as dots.
-  const vShaped = h >= 4 && w >= 0.35 * h && w <= 4 * h && Math.abs(last.x - first.x) >= 0.5 * w;
-  if (vShaped && inner(iBottom) && maxY - first.y >= 0.55 * h && maxY - last.y >= 0.55 * h) {
-    return { kind: 'sys', x: P[iBottom].x, y: maxY };
-  }
-  if (vShaped && inner(iTop) && first.y - minY >= 0.55 * h && last.y - minY >= 0.55 * h) {
-    return { kind: 'dia', x: P[iTop].x, y: minY };
-  }
-  const tri = closedTriangle(P, minX, maxX, minY, maxY);
-  if (tri === 'down') return { kind: 'sys', x: P[iBottom].x, y: maxY };
-  if (tri === 'up') return { kind: 'dia', x: P[iTop].x, y: minY };
+  // Pointed shapes come before taps so that small ones aren't mistaken for dots.
+  const shape = pointedShape(P, { minX, maxX, minY, maxY, iTop, iBottom });
+  if (shape === 'down') return { kind: 'sys', x: P[iBottom].x, y: maxY };
+  if (shape === 'up') return { kind: 'dia', x: P[iTop].x, y: minY };
   if (tap) return { kind: 'hr', x: cx, y: cy };
   if (h >= 10 && h >= 1.6 * w) return { kind: 'bp', x: cx, top: minY, bottom: maxY };
   return null;
 }
 
-// A hand-drawn closed triangle: 'down' (▼) or 'up' (▲), else null.
-function closedTriangle(P, minX, maxX, minY, maxY) {
-  const w = maxX - minX, h = maxY - minY;
-  if (w < 5 || h < 4 || w < 0.5 * h || w > 3 * h) return null;
+// Points about 1 px apart along the stroke, so sparse samples don't skew the shape test.
+function resample(P) {
+  const out = [P[0]];
+  for (let i = 1; i < P.length; i++) {
+    const a = P[i - 1], b = P[i];
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y)));
+    for (let k = 1; k <= n; k++) out.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
+  }
+  return out;
+}
+
+// A chevron or triangle of any size, drawn neatly or not: 'down' (V ▼), 'up' (Λ ▲) or null.
+function pointedShape(P, box) {
+  const w = box.maxX - box.minX, h = box.maxY - box.minY;
+  if (h < 4 || w < 0.12 * h || w > 5 * h) return null;
+  const R = resample(P);
+  const down = isPointed(P, R, box, P[box.iBottom], 1);
+  const up = isPointed(P, R, box, P[box.iTop], -1);
+  if (down === up) return null;
+  return down ? 'down' : 'up';
+}
+
+// dir 1: the point is at the bottom (V ▼); dir -1: at the top (Λ ▲).
+function isPointed(P, R, box, tip, dir) {
+  const w = box.maxX - box.minX, h = box.maxY - box.minY;
+  // The point lies between the shape's left and right edges, not at one of them (as a slanted line's would).
+  if (tip.x < box.minX + 0.08 * w || tip.x > box.maxX - 0.08 * w) return false;
+  // Open chevron, arms of any length: both ends well away from the point, one on each side.
   const first = P[0], last = P[P.length - 1];
-  if (Math.hypot(last.x - first.x, last.y - first.y) > 0.4 * Math.max(w, h)) return null;
-  let length = 0;
-  for (let i = 1; i < P.length; i++) length += Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y);
-  if (length < 2 * Math.max(w, h)) return null;
-  // The flat side is wide and the point is narrow; a circle is equally wide at both ends.
-  const widthBetween = (y0, y1) => {
+  const away = (p) => (tip.y - p.y) * dir;
+  if (away(first) >= 0.3 * h && away(last) >= 0.3 * h && (first.x - tip.x) * (last.x - tip.x) < 0
+      && Math.abs(last.x - first.x) >= 0.3 * w) return true;
+  // Any outline that is wide on the far side and narrow near the point, closed or not (a circle isn't).
+  const widthWhere = (keep) => {
     let a = Infinity, b = -Infinity;
-    for (const p of P) {
-      if (p.y < y0 || p.y > y1) continue;
+    for (const p of R) {
+      if (!keep((tip.y - p.y) * dir)) continue;
       if (p.x < a) a = p.x;
       if (p.x > b) b = p.x;
     }
     return b > a ? b - a : 0;
   };
-  const top = widthBetween(minY, minY + 0.25 * h);
-  const bottom = widthBetween(maxY - 0.25 * h, maxY);
-  if (top >= 0.5 * w && top >= 1.8 * bottom) return 'down';
-  if (bottom >= 0.5 * w && bottom >= 1.8 * top) return 'up';
-  return null;
+  const far = widthWhere((d) => d >= 0.7 * h);
+  const near = widthWhere((d) => d <= 0.3 * h);
+  return far >= 0.6 * w && near <= 0.55 * far;
+}
+
+const bounds = (P) => {
+  const b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+  for (const p of P) {
+    b.minX = Math.min(b.minX, p.x);
+    b.maxX = Math.max(b.maxX, p.x);
+    b.minY = Math.min(b.minY, p.y);
+    b.maxY = Math.max(b.maxY, p.y);
+  }
+  return b;
+};
+
+// Is box a inside box b, give or take a quarter of b's size?
+function within(a, b) {
+  const m = Math.max(6, 0.25 * Math.max(b.maxX - b.minX, b.maxY - b.minY));
+  return a.minX >= b.minX - m && a.maxX <= b.maxX + m && a.minY >= b.minY - m && a.maxY <= b.maxY + m;
 }
 
 let rejectTimer = 0;
+let pending = null;     // an unrecognized stroke, waiting briefly for a stroke that completes it (\ then /)
+let lastShape = null;   // the ▼/▲ just drawn, so a stroke that closes or retouches it is absorbed
+
+function drawPending() {
+  if (pending) renderStroke(ctx.live, { pts: pending.pts }, 'rgba(100, 116, 139, 0.55)');
+}
+
+function dropPending() {
+  if (pending) clearTimeout(pending.timer);
+  pending = null;
+  lastShape = null;
+}
+
+function rejectStroke(pts) {
+  renderStroke(ctx.live, { pts }, 'rgba(212, 42, 42, 0.55)');
+  clearTimeout(rejectTimer);
+  rejectTimer = setTimeout(() => {
+    if (gesture) return;
+    clearCanvas('live');
+    drawPending();
+  }, 700);
+  toast('Not recognized. Tap for heart rate, draw a short vertical line for blood pressure, or draw \u25BC / \u25B2 (V / \u039B also work).', true);
+}
+
+// The waiting stroke found no partner: report it now.
+function settlePending() {
+  const p = pending;
+  if (!p) return;
+  clearTimeout(p.timer);
+  pending = null;
+  if (!gesture) clearCanvas('live');
+  rejectStroke(p.pts);
+}
+
+function waitForPartner(pts, P, box) {
+  if (pending) settlePending();
+  pending = { pts, P, box, timer: 0 };
+  const fire = () => {
+    // A stroke in progress may be the partner; wait for it to finish.
+    if (gesture && gesture.smart) pending.timer = setTimeout(fire, 300);
+    else settlePending();
+  };
+  pending.timer = setTimeout(fire, 1200);
+  drawPending();
+}
+
 function interpretSmart(pts) {
-  const P = pts.map((q) => ({ x: unitX(q.x), y: unitY(q.y) }));
-  const res = classify(P, state.mark);
+  const now = performance.now();
+  let P = pts.map((q) => ({ x: unitX(q.x), y: unitY(q.y) }));
+  let box = bounds(P);
+  let res = classify(P, state.mark);
   if (!res) {
-    renderStroke(ctx.live, { pts }, 'rgba(212, 42, 42, 0.55)');
-    clearTimeout(rejectTimer);
-    rejectTimer = setTimeout(() => { if (!gesture) clearCanvas('live'); }, 700);
-    toast('Not recognized. Tap for heart rate, draw a short vertical line for blood pressure, or draw \u25BC / \u25B2 (V / \u039B also work).', true);
-    return;
+    // A closing edge or touch-up of the ▼/▲ just drawn belongs to it.
+    if (lastShape && now - lastShape.t < 2500 && within(box, lastShape.box)) {
+      lastShape.t = now;
+      drawPending();
+      return;
+    }
+    // Two strokes that only make a shape together, such as \ then /.
+    if (pending) {
+      const both = pending.P.concat(P);
+      const joint = classify(both, state.mark);
+      if (joint && (joint.kind === 'sys' || joint.kind === 'dia')) {
+        clearTimeout(pending.timer);
+        pending = null;
+        res = joint;
+        P = both;
+        box = bounds(both);
+      }
+    }
+    if (!res) {
+      waitForPartner(pts, P, box);
+      return;
+    }
+  } else if (pending && within(pending.box, box)) {
+    // A stroke drawn just before this shape (such as the top edge of a ▼) was part of it.
+    clearTimeout(pending.timer);
+    pending = null;
   }
+  drawPending();
+  if (res.kind === 'sys' || res.kind === 'dia') lastShape = { box, t: now };
   const col = snapCol(res.x);
   const fields = {};
   if (res.kind === 'bp') {
@@ -789,7 +1044,7 @@ function eraseAt(x, y) {
   renderTable();
 }
 
-const hasAnyValue = (v) => VITAL_FIELDS.some((f) => v[f.key] != null);
+const hasAnyValue = (v) => ALL_KEYS.some((k) => v[k] != null);
 
 // B (smart grid) and C (type it in) work on the same data.
 const dataKey = () => (state.mode === 'ink' ? 'ink' : 'smart');
@@ -808,7 +1063,7 @@ function pushUndo() {
 
 function undo() {
   // With unsaved typing, Undo first throws that away.
-  if (state.mode === 'typed' && typed.dirty) {
+  if (state.mode === 'typed' && typed.changed) {
     revertDraft();
     return;
   }
@@ -831,6 +1086,8 @@ function clearAll() {
   if (!d.strokes.length && !(d.vitals && Object.keys(d.vitals).length)) return;
   const what = state.mode === 'ink' ? 'drawn in Digital ink' : 'in Smart grid and Type it in (they share the same numbers)';
   if (!window.confirm(`Clear everything ${what}? Undo can bring it back.`)) return;
+  closePicker();
+  dropPending();
   pushUndo();
   d.strokes = [];
   if (d.vitals) d.vitals = {};
@@ -933,7 +1190,7 @@ function renderTable() {
   const cols = Object.keys(vit).map(Number).sort((a, b) => a - b);
   const parts = [
     `<div class="labels" style="width:${Math.round(L.gridLeft - L.colW / 2 - 6)}px">` +
-      `<span class="t">Time</span>${VITAL_FIELDS.map((f) => `<span>${f.label}</span>`).join('')}</div>`,
+      `<span class="t">Time</span>${TABLE_FIELDS.map((f) => `<span>${f.label}</span>`).join('')}</div>`,
   ];
   let prevHour = null;
   for (const col of cols) {
@@ -944,7 +1201,7 @@ function renderTable() {
     prevHour = t.slice(0, 2);
     parts.push(
       `<div class="vcol${col === lastChangedCol ? ' fresh' : ''}" style="left:${(colX(col) - L.colW / 2).toFixed(1)}px;width:${L.colW.toFixed(1)}px">` +
-        `<span class="t">${label}</span>${VITAL_FIELDS.map((f) => `<span class="${f.key}">${v[f.key] ?? ''}</span>`).join('')}</div>`,
+        `<span class="t">${label}</span>${TABLE_FIELDS.map((f) => `<span class="${f.key}">${v[f.key] ?? ''}</span>`).join('')}</div>`,
     );
   }
   if (!cols.length) {
@@ -984,15 +1241,15 @@ function renderDiag() {
 
 const HINTS = {
   ink: 'Only the Pencil draws; fingers and palms leave no marks.',
-  auto: 'Tap = heart rate \u00b7 short vertical line = BP \u00b7 or draw \u25BC / \u25B2 (V / \u039B also work)',
+  auto: 'Draw \u25BC / \u25B2 (or V / \u039B) any size \u00b7 tap = heart rate \u00b7 vertical line = BP \u00b7 tap a row below to pick a value',
   sys: 'Every mark is a systolic value (tap, or the point of a \u25BC or V)',
   dia: 'Every mark is a diastolic value (tap, or the point of a \u25B2 or \u039B)',
   hr: 'Every mark is a heart rate',
-  typed: 'Tap a time, enter the numbers, then Save. Keyboard: digits, Tab, Enter, arrow keys.',
+  typed: 'Tap a time, enter the numbers, then Save. Tap a row below the grid to pick SpO\u2082, Paw, EKG and the rest.',
 };
 
 function updateButtons() {
-  $('#undoBtn').disabled = undoStacks[dataKey()].length === 0 && !(state.mode === 'typed' && typed.dirty);
+  $('#undoBtn').disabled = undoStacks[dataKey()].length === 0 && !(state.mode === 'typed' && typed.changed);
   $('#hint').textContent = state.mode === 'smart' ? HINTS[state.mark] : HINTS[state.mode];
 }
 
@@ -1004,10 +1261,12 @@ function setSegment(segSel, attr, value) {
 
 function setMode(mode) {
   if (L && mode === state.mode) return;
-  if (state.mode === 'typed' && mode !== 'typed' && typed.dirty && !commitDraft()) {
+  if (state.mode === 'typed' && mode !== 'typed' && typed.changed && typed.dirty && !commitDraft()) {
     loadDraft();
     toast('Unsaved values were not valid, so they were discarded', true);
   }
+  closePicker();
+  dropPending();
   state.mode = mode;
   document.body.dataset.mode = mode;
   setSegment('#modeSeg', 'mode', mode);
@@ -1080,6 +1339,13 @@ function initControls() {
       undo();
       return;
     }
+    if (pickerState) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closePicker();
+      }
+      return;
+    }
     if (state.mode === 'typed') typedKeydown(e);
   });
 
@@ -1116,6 +1382,7 @@ function initControls() {
   }
 
   initTyped();
+  initPicker();
   initPhoto();
 }
 
@@ -1130,8 +1397,13 @@ function setStart(value) {
 
 /* ---------- C: type it in ---------- */
 
-// The time point being edited; draft holds the typed strings until they are saved.
-const typed = { col: null, field: 'sys', draft: {}, dirty: false, replace: true, autoAdvanced: false, notice: false };
+// The time point being edited. draft holds the strings shown in the fields; source says where each
+// came from ('saved', 'carried' from an earlier time, or 'typed'). dirty: draft differs from what's
+// saved; changed: the user typed something (only then is it saved automatically when moving on).
+const typed = {
+  col: null, field: 'sys', draft: {}, source: {}, prefillFrom: null,
+  dirty: false, changed: false, replace: true, autoAdvanced: false, notice: false,
+};
 
 function overTimeColumns(x, y) {
   return x >= L.gridLeft - L.colW && x <= L.gridRight + L.colW && y >= 0 && y <= L.lowerBottom;
@@ -1149,6 +1421,8 @@ function typedPointerDown(e) {
   e.preventDefault();
   try { chartEl.setPointerCapture(e.pointerId); } catch (_) { /* capture is optional */ }
   gesture = { id: e.pointerId, typed: true };
+  // A tap on the rows below the grid also opens that cell's picker (on release).
+  if (y > L.gridBottom) gesture.rowTap = { x0: x, y0: y, moved: 0 };
   diag.lastType = e.pointerType;
   renderDiag();
   clearCanvas('overlay');
@@ -1159,8 +1433,10 @@ function typedPointerDown(e) {
 function typedPointerMove(e) {
   const [x, y] = local(e);
   if (gesture) {
+    if (!gesture.typed || e.pointerId !== gesture.id) return;
+    if (gesture.rowTap) gesture.rowTap.moved = Math.max(gesture.rowTap.moved, Math.hypot(x - gesture.rowTap.x0, y - gesture.rowTap.y0));
     // Sliding along the chart moves the selected time.
-    if (gesture.typed && e.pointerId === gesture.id) selectCol(snapCol(x));
+    selectCol(snapCol(x));
     return;
   }
   if (e.pointerType !== 'touch') updateOverlay(x, y);
@@ -1177,11 +1453,42 @@ function setField(key) {
   typed.autoAdvanced = false;
 }
 
+// Each field's latest value before col, so a new time starts from the previous one.
+function previousValues(col) {
+  const vit = state.data.smart.vitals;
+  const earlier = Object.keys(vit).map(Number).filter((c) => c < col).sort((a, b) => b - a);
+  const values = {};
+  let from = null;
+  for (const f of VITAL_FIELDS) {
+    const c = earlier.find((k) => vit[k][f.key] != null);
+    if (c == null) continue;
+    values[f.key] = vit[c][f.key];
+    from = from == null ? c : Math.max(from, c);
+  }
+  return { values, from };
+}
+
+// Saved values where there are some; otherwise the previous time's values, shown as carried until saved.
 function loadDraft() {
+  const prev = previousValues(typed.col);
   typed.draft = {};
-  for (const f of VITAL_FIELDS) typed.draft[f.key] = storedString(typed.col, f.key);
-  typed.dirty = false;
-  setField((VITAL_FIELDS.find((f) => !typed.draft[f.key]) || VITAL_FIELDS[0]).key);
+  typed.source = {};
+  typed.prefillFrom = null;
+  for (const f of VITAL_FIELDS) {
+    const saved = storedString(typed.col, f.key);
+    if (!saved && prev.values[f.key] != null) {
+      typed.draft[f.key] = String(prev.values[f.key]);
+      typed.source[f.key] = 'carried';
+      typed.prefillFrom = prev.from;
+    } else {
+      typed.draft[f.key] = saved;
+      typed.source[f.key] = 'saved';
+    }
+  }
+  typed.changed = false;
+  updateDirty();
+  // Start at the first field still to confirm or fill (Sys when everything is prefilled).
+  setField((VITAL_FIELDS.find((f) => typed.source[f.key] === 'carried' || !typed.draft[f.key]) || VITAL_FIELDS[0]).key);
 }
 
 function updateDirty() {
@@ -1215,7 +1522,8 @@ function selectCol(col, { keepNotice = false } = {}) {
   col = Math.max(0, Math.min(GRID.columns, col));
   if (!keepNotice) typed.notice = false;
   if (col !== typed.col) {
-    if (typed.dirty && !commitDraft()) return false;   // unsaved values are saved before moving on
+    // Typed changes are saved before moving on; prefilled values nobody touched are just dropped.
+    if (typed.changed && typed.dirty && !commitDraft()) return false;
     typed.col = col;
     loadDraft();
   }
@@ -1232,6 +1540,8 @@ function typeKey(k) {
     if (s.length >= f.len) return;
     s = s === '0' ? k : s + k;
     typed.draft[f.key] = s;
+    typed.source[f.key] = 'typed';
+    typed.changed = true;
     typed.replace = false;
     typed.autoAdvanced = false;
     // A full field moves on by itself, except from the last one.
@@ -1241,6 +1551,8 @@ function typeKey(k) {
     }
   } else if (k === 'back' || k === 'clear') {
     typed.draft[f.key] = k === 'back' && !typed.replace ? typed.draft[f.key].slice(0, -1) : '';
+    typed.source[f.key] = 'typed';
+    typed.changed = true;
     typed.replace = false;
     typed.autoAdvanced = false;
   } else if (k === 'next' || k === 'prev') {
@@ -1269,12 +1581,19 @@ function commitDraft() {
       return false;
     }
   }
-  const after = draftValues();
+  // Saving confirms everything shown, prefilled values included. Values only picked in the
+  // rows below the grid (Paw, EKG, T, IV fluid, EBL) are kept.
   const vit = state.data.smart.vitals;
+  const after = { ...(vit[typed.col] || {}) };
+  for (const f of VITAL_FIELDS) delete after[f.key];
+  Object.assign(after, draftValues());
   pushUndo();
   if (hasAnyValue(after)) vit[typed.col] = after;
   else delete vit[typed.col];
+  for (const f of VITAL_FIELDS) typed.source[f.key] = 'saved';
+  typed.prefillFrom = null;
   typed.dirty = false;
+  typed.changed = false;
   lastChangedCol = typed.col;
   renderTable();
   renderTyped();
@@ -1300,7 +1619,7 @@ function savedMessage(col, v) {
 }
 
 function revertDraft() {
-  if (!typed.dirty) return;
+  if (!typed.changed) return;
   loadDraft();
   renderTyped();
   toast('Unsaved changes discarded');
@@ -1327,7 +1646,7 @@ function startChartNow() {
   const d = state.data.smart;
   const hasData = Object.keys(d.vitals).length || d.strokes.length;
   if (hasData && !window.confirm(`Start the chart at ${start}? Values already on it keep their columns, so their times move too.`)) return;
-  if (typed.dirty && !commitDraft()) return;
+  if (typed.changed && typed.dirty && !commitDraft()) return;
   setStart(start);
   selectNow();
 }
@@ -1342,18 +1661,21 @@ function renderTyped() {
   const saved = !!state.data.smart.vitals[typed.col];
   $('#tpTime').textContent = timeAt(typed.col);
   const status = $('#tpStatus');
-  status.textContent = typed.dirty ? 'Unsaved changes' : saved ? 'Saved' : 'Nothing saved yet';
-  status.classList.toggle('dirty', typed.dirty);
+  if (typed.changed) status.textContent = 'Unsaved changes';
+  else if (typed.dirty) status.textContent = `From ${timeAt(typed.prefillFrom)} \u00b7 Save to confirm`;
+  else status.textContent = saved ? 'Saved' : 'Nothing saved yet';
+  status.classList.toggle('dirty', typed.changed);
   for (const b of document.querySelectorAll('#tpFields button')) {
     const key = b.dataset.field;
     const s = typed.draft[key] || '';
     b.querySelector('b').textContent = s || '\u2013';
     b.classList.toggle('active', key === typed.field);
     b.classList.toggle('replace', key === typed.field && typed.replace && s !== '');
-    b.classList.toggle('changed', s !== storedString(typed.col, key));
+    b.classList.toggle('carried', typed.source[key] === 'carried');
+    b.classList.toggle('changed', typed.source[key] === 'typed' && s !== storedString(typed.col, key));
   }
   $('#tpSave').disabled = !typed.dirty;
-  $('#tpDelete').disabled = !saved && !typed.dirty;
+  $('#tpDelete').disabled = !saved && !typed.changed;
   renderNotice();
   placePanel();
   updateButtons();
@@ -1407,8 +1729,14 @@ function drawSelection() {
   c.textBaseline = 'middle';
   c.fillText(label, x, HEADER_H / 2 + 0.5);
   if (typed.dirty) {
+    // Preview of the unsaved values: faint marks, and the pad's rows shown as not yet entered.
+    const draft = draftValues();
     c.globalAlpha = 0.5;
-    drawMarks(c, x, draftValues());
+    drawMarks(c, x, draft);
+    c.globalAlpha = 1;
+    ROW_PARAMS.forEach((p, i) => {
+      if (PAD_ROW_KEYS.includes(p.key) && draft[p.key] != null) drawRowCell(c, i, typed.col, cellText(p, draft[p.key]), true);
+    });
   }
   c.restore();
 }
@@ -1447,6 +1775,150 @@ function initTyped() {
     else if (b.id === 'tpStartNow') startChartNow();
     b.blur();   // leave Enter and Space to the number entry
   });
+}
+
+/* ---------- rows below the grid: pickers with carry-forward (B and C) ---------- */
+
+let pickerState = null;   // { row, col } of the cell whose picker is open
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+
+// The value a cell shows: entered at this time, carried from the latest earlier entry, or null.
+function rowStatus(p, col) {
+  const vit = state.data.smart.vitals;
+  if (vit[col] && vit[col][p.key] != null) return { value: vit[col][p.key], carried: false };
+  const earlier = Object.keys(vit).map(Number).filter((c) => c < col && vit[c][p.key] != null);
+  if (!earlier.length) return null;
+  const from = Math.max(...earlier);
+  return { value: vit[from][p.key], carried: true, from };
+}
+
+function openPicker(row, col) {
+  if (state.mode === 'ink') return;
+  pickerState = { row, col: Math.max(0, Math.min(GRID.columns, col)) };
+  renderPicker();
+}
+
+function closePicker() {
+  if (!pickerState) return;
+  pickerState = null;
+  $('#rowPicker').hidden = true;
+  $('#cellMark').hidden = true;
+}
+
+function renderPicker() {
+  const { row, col } = pickerState;
+  const p = ROW_PARAMS[row];
+  const st = rowStatus(p, col);
+  for (const b of document.querySelectorAll('#rpTabs button')) b.classList.toggle('on', Number(b.dataset.row) === row);
+  $('#rpTitle').textContent = `${p.label} (${p.unit}) at ${timeAt(col)}`;
+  $('#rpInfo').textContent = !st
+    ? 'Nothing yet. What you pick repeats at later times until changed.'
+    : st.carried
+      ? `Carried from ${timeAt(st.from)}. Pick a value to change it from here on.`
+      : 'Entered here. It repeats at later times until changed.';
+  const mark = (v) => (st && String(st.value) === String(v) ? (st.carried ? 'carried' : 'entered') : '');
+  const box = $('#rpValues');
+  box.classList.toggle('rhythms', !!p.rhythms);
+  if (p.rhythms) {
+    const known = p.rhythms.some(([code]) => code === (st && st.value));
+    const own = st && !known ? `<button type="button" data-value="${esc(st.value)}" class="${mark(st.value)}"><span>${esc(st.value)}</span><small>typed earlier</small></button>` : '';
+    box.innerHTML = own + p.rhythms.map(([code, name]) => `<button type="button" data-value="${code}" class="${mark(code)}"><span>${code}</span><small>${name}</small></button>`).join('')
+      + '<button type="button" data-other="1"><span>Other\u2026</span><small>type a rhythm</small></button>';
+  } else {
+    box.innerHTML = p.values.map((v) => `<button type="button" data-value="${v}" class="${mark(v)}">${cellText(p, v)}</button>`).join('');
+  }
+  $('#rpClear').disabled = !(st && !st.carried);
+  placePicker();
+  const target = box.querySelector('.entered, .carried') || box.querySelector(`[data-value="${p.typical}"]`);
+  box.scrollTop = target ? target.offsetTop - box.clientHeight / 2 + target.offsetHeight / 2 : 0;
+}
+
+// Beside the tapped column (so it stays visible), clear of the mode C panel when there is one.
+function placePicker() {
+  const el = $('#rowPicker');
+  const { row, col } = pickerState;
+  const w = Math.min(330, L.cssW - 8);
+  const x = colX(col);
+  const panel = state.mode === 'typed' && !$('#typePanel').hidden ? $('#typePanel') : null;
+  const pl = panel ? panel.offsetLeft : 0, pr = panel ? pl + panel.offsetWidth : 0;
+  const fits = (left) => left >= 4 && left + w <= L.cssW - 4 && (!panel || left + w <= pl || left >= pr);
+  const leftSide = x - L.colW * 0.75 - w, rightSide = x + L.colW * 0.75;
+  const prefer = panel ? (pl > x ? [leftSide, rightSide] : [rightSide, leftSide]) : (x > L.cssW / 2 ? [leftSide, rightSide] : [rightSide, leftSide]);
+  const left = prefer.find(fits) ?? Math.max(4, Math.min(L.cssW - w - 4, prefer[0]));
+  el.hidden = false;
+  el.style.width = `${w}px`;
+  el.style.maxHeight = `${Math.round(Math.min(430, L.cssH - 8))}px`;
+  el.style.left = `${Math.round(left)}px`;
+  const m = $('#cellMark');
+  m.hidden = false;
+  m.style.left = `${Math.round(x - L.colW / 2)}px`;
+  m.style.top = `${Math.round(L.lowerTop + row * L.lowerRowH)}px`;
+  m.style.width = `${Math.round(L.colW)}px`;
+  m.style.height = `${Math.round(L.lowerRowH)}px`;
+}
+
+function afterRowChange(col) {
+  lastChangedCol = col;
+  // In C, the panel shows the new value if nothing has been typed there yet.
+  if (state.mode === 'typed' && typed.col === col && !typed.changed) loadDraft();
+  redrawInk();
+  renderTable();
+  renderTyped();
+  updateButtons();
+  save();
+}
+
+function pickRowValue(raw) {
+  const { row, col } = pickerState;
+  const p = ROW_PARAMS[row];
+  const value = p.rhythms ? String(raw).trim().slice(0, 24) : Number(raw);
+  if (p.rhythms && !value) return;
+  pushUndo();
+  const vit = state.data.smart.vitals;
+  vit[col] = { ...(vit[col] || {}), [p.key]: value };
+  closePicker();
+  afterRowChange(col);
+  toast(`${p.label} ${cellText(p, value)}${p.rhythms ? '' : ` ${p.unit}`} at ${timeAt(col)} \u00b7 repeats at later times until changed`);
+}
+
+function clearRowValue() {
+  const { row, col } = pickerState;
+  const p = ROW_PARAMS[row];
+  const vit = state.data.smart.vitals;
+  if (!vit[col] || vit[col][p.key] == null) return;
+  pushUndo();
+  delete vit[col][p.key];
+  if (!hasAnyValue(vit[col])) delete vit[col];
+  closePicker();
+  afterRowChange(col);
+  const st = rowStatus(p, col);
+  toast(`Cleared ${p.label} at ${timeAt(col)}${st ? ` (the ${timeAt(st.from)} value carries here now)` : ''}`);
+}
+
+function initPicker() {
+  $('#rpTabs').innerHTML = ROW_PARAMS.map((p, i) => `<button type="button" data-row="${i}">${p.key === 'ivf' ? 'IVF' : p.label}</button>`).join('');
+  $('#rowPicker').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b || b.disabled || !pickerState) return;
+    if (b.dataset.row) {
+      pickerState.row = Number(b.dataset.row);
+      renderPicker();
+    } else if (b.dataset.step) {
+      pickerState.col = Math.max(0, Math.min(GRID.columns, pickerState.col + Number(b.dataset.step)));
+      renderPicker();
+    } else if (b.dataset.other) {
+      const text = window.prompt('Rhythm, as you would write it on the chart:', '');
+      if (text && text.trim()) pickRowValue(text);
+    } else if (b.dataset.value != null) pickRowValue(b.dataset.value);
+    else if (b.id === 'rpClear') clearRowValue();
+    else if (b.id === 'rpClose') closePicker();
+    b.blur();
+  });
+  // A tap anywhere else closes it (a tap on another cell then opens that one).
+  document.addEventListener('pointerdown', (e) => {
+    if (pickerState && !e.target.closest('#rowPicker')) closePicker();
+  }, true);
 }
 
 /* ---------- photo of the monitor ---------- */
